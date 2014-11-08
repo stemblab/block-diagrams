@@ -1,0 +1,11 @@
+$pz.resources = -> [        
+        {moduleId: "b0088", file: "drawing.js"}
+    	{file: "draw.js"}
+		{url: "/puzlet/custom/custom.js"}
+		{url: "http://jashkenas.github.io/"+
+            "coffee-script/extras/coffee-script.js"}
+        {url: "/jslib/vkbeautify.0.99.00.beta.js"}
+]
+
+#!end (5)
+

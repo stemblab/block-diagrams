@@ -1,0 +1,513 @@
+<document>
+
+<code lang="coffee" file="drawing" id="1" exec="0" show="1" out="1">
+drawingDevMode = true
+MathJaxProcessor?.mode = "SVG"
+
+window.loadScript = (name, moduleId=null) ->
+    moduleId = $pz.module.id unless moduleId
+    t = new Date().getTime()
+    scriptId = "script_" + name
+    $("#"+scriptId).remove()
+    script = $ "<script>"
+	    id: scriptId
+	    src: "puzlet/php/source.php?pageId=#{moduleId}&file=#{name}.js&t="+t
+    $(document.head).append script
+
+
+puzletInit.register (-> window.$setupDrawing())
+
+class SVG
+	
+	@NS: "http://www.w3.org/2000/svg"
+	
+	@element: (type) -> document.createElementNS @NS, type
+	
+	@attr: (el, p, v) -> el.setAttributeNS null, p, v
+	
+	@get: (el, p) -> el.getAttributeNS null, p
+	
+	@set: (el, props) ->
+		for p, v of props
+			@attr el, p, v
+
+
+class Drawing
+	
+	constructor: (s) ->
+		
+		@unit = s.unit ? 100
+		@defaultOffset = 2/3*@unit
+		@showJunctions = s.showJunctions ? false
+		@defaultFill = s.defaultFill ? "yellow"  # block fill color
+		
+		@canvas = $ "#"+s.id
+		unless @canvas.length
+			@canvas = null
+			return
+		@canvas.empty()
+		@svg = SVG.element "svg"
+		SVG.set @svg,
+			width: s.width ? 700
+			height: s.height ? 400
+		@defs = SVG.element "defs"
+		@svg.appendChild @defs
+		new ArrowHead @defs
+		@g = SVG.element "g"
+		x = y = 0
+		scale = 1
+		SVG.set @g,
+			id: "drawing_svg"
+			transform: "matrix(#{scale}, 0, 0, #{scale}, #{x}, #{y})"
+		@svg.appendChild @g
+		@canvas[0].appendChild @svg
+		@labels = new Labels
+	
+	block: (s={}) ->
+		o = s.o
+		l = s.offset ? @defaultOffset
+		type = s.type ? "block"
+		isSum = type is "sum"  # Later, get from lookup.
+		size = if isSum then @unit/2 else @unit
+		w = s.width ? size
+		h = s.height ? size
+		shape = if isSum then "circle" else "rect" 
+		label = s.label ? (if isSum then "$\\small+$" else "")
+		if o.from?
+			# Relative to another block position
+			b = o.from
+				line: l, width: w, height: h
+				shape: shape
+				label: label
+		else
+			# Coordinates specified
+			s.x = o[0]
+			s.y = o[1]
+			s.line = l
+			s.width = w
+			s.height = h
+			s.shape = shape
+			s.label = label
+			b = new Block this, s
+		b
+	
+	junc: (spec={}) ->
+		o = spec.o
+		show = @showJunctions
+		size = if show then 5 else 0.1
+		label = if show then spec.label else ""
+		#l = spec.offset ? line
+		s =
+			line: spec.offset ? @defaultOffset
+			width: size, height: size
+			label: ""
+			noArrow: true
+		if o.from?
+			# Relative to another block position
+			junction = o.from s
+		else
+			# Coordinates specified
+			s.x = o[0]
+			s.y = o[1]
+			junction = new Block this, s
+		mjLabel = "$\\scriptsize\\text{#{label}}$"
+		junction.top.label {label: mjLabel, width: 40, center: true}
+		junction
+	
+	circle: (s={}) -> new Circle this, s
+	
+	append: (object) -> @g.appendChild object
+	
+	addLabel: (label) -> @labels.append label
+	
+	shortcuts: ->
+		block = (s) => @block s
+		junc = (s) => @junc s
+		connect = (a, b) -> a.connect b
+		inp = (s) -> s.o.inp s
+		output = (s) -> s.o.out s  
+		[block, junc, connect, inp, output]
+	
+
+
+class Coord
+	
+	constructor: (@drawing, @x, @y) ->
+		@hGap = 8
+		
+	horizontal: -> null
+	sameDimAs: (c) -> @horizontal is c.horizontal 
+	
+	inp: (s={}) ->
+		from = @offset (s.line ? @drawing.defaultOffset)
+		to = if s.noArrow then @offset 0 else @arrowOffset()
+		s.width ?= 50
+		@line from, to, from, s
+		
+	out: (s={}) ->
+		from = this
+		to = @offset (s.line ? @drawing.defaultOffset)
+		s.width ?= 50
+		@line from, to, to, s
+		
+	line: (from, to, l, s) ->
+		l.lineLabel s
+		new Path @drawing, [from, to], s.noArrow	  
+		
+	lineLabel: (s) ->		 
+		s = {label: s} if typeof(s) is "string"
+		s.center = true
+		@label s
+	   
+	# Parameters for translating label y-coord
+	# hFactor: height, yGap: offset
+	labelYOffset: (s) -> hFactor: -0.5, gap: 0
+	
+	offset: (l) -> @coord @x-l, @y
+	
+	labelX: (s) -> @x + @hGap
+	labelAlign: (s) -> "left"
+	labelVAlign: (s) -> null  # not implemented yet
+	label: (s) ->
+		new Label @drawing,
+			x: @labelX s
+			y: @y
+			yOffset: @labelYOffset s
+			width:	@width s
+			height: s.height ? null
+			align: @labelAlign s
+			vAlign: @labelVAlign s
+			id: s.id ? null
+			mathjax: (if typeof(s) is "string" then s else s.label)
+	
+	width: (s) -> s.width ? 30
+	
+	coord: (x, y) -> new Coord @drawing, x, y
+	
+	connect: (to, noArrow=false) ->
+		end = if noArrow then to else to.arrowOffset() 
+		if @sameDimAs to
+			path = [this, end]
+		else
+			h = @horizontal()
+			x = if h then to.x else @x
+			y = if h then @y else to.y
+			mid = @coord x, y
+			path = [this, mid, end]
+		new Path @drawing, path, noArrow
+		
+	newBlock: (s) ->
+		c = @newBlockOffset s
+		s.x = c.x
+		s.y = c.y
+		block = new Block @drawing, s
+		
+	from: (s) -> 
+		block = @newBlock s
+		@connect block[@pairWith()], s.noArrow
+		block
+		
+	to: (s) -> 
+		block = @newBlock s
+		block[@pairWith()].connect this, s.noArrow 
+		block
+		
+	newBlockOffset: (s) ->
+		@offset (s.line ? 40) + (s.width ? Block.defaultSize.width)/2
+				
+	arrowOffset: -> @offset 2
+	
+	toString: -> "#{@x} #{@y}"
+
+class HCoord extends Coord
+	horizontal: -> true
+	labelYOffset: (s) ->
+		hFactor: (if s.center then -0.5 else -1)
+		gap: (if s.center then 0 else -6)
+
+class VCoord extends Coord
+	horizontal: -> false
+	labelX: (s) -> @x + (if s.center then 0 else @hGap)
+	labelAlign: (s) -> (if s.center then "center" else "left")
+	newBlockOffset: (s) ->
+		@offset (s.line ? 40) + (s.height ? Block.defaultSize.height)/2
+
+class Left extends HCoord
+	labelX: (s) -> @x - @hGap
+	labelAlign: (s) -> "right"
+	offset: (l) -> new Left @drawing, @x-l, @y
+	pairWith: -> "right"
+
+class Right extends HCoord
+	offset: (l) -> new Right @drawing, @x+l, @y
+	pairWith: -> "left"
+
+class Top extends VCoord
+	labelYOffset: (s) -> hFactor: -1, gap: -5
+	offset: (l) -> new Top @drawing, @x, @y-l
+	pairWith: -> "bottom"
+
+class Bottom extends VCoord
+	labelYOffset: (s) -> hFactor: 0, gap: 5
+	offset: (l) -> new Bottom @drawing, @x, @y+l
+	pairWith: -> "top"
+
+
+class Path
+	
+	constructor: (@drawing, @coords, noArrow=false) ->
+		d = ""
+		c = "M"
+		for coord in @coords
+			s = coord.toString()
+			d += c + s 
+			c = " L"
+		p = SVG.element "path"
+		SVG.set p,
+			d: d
+			style: "fill:none; stroke:black; stroke-width:2;"
+		SVG.set p, "marker-end": "url(#arrowHead)" unless noArrow
+		@drawing.append p
+
+
+class Component
+	
+	constructor: (@drawing, @spec) ->
+		
+		@x = @spec.x ? 0
+		@y = @spec.y ? 0
+		@center = new Coord @drawing, @x, @y
+		
+		w = @width()
+		h = @height()
+				
+		tw = w - 10
+		new Label @drawing,
+			mathjax: @spec.label ? ""
+			x: @x
+			y: @y
+			align: "center"
+			vAlign: "middle"
+		
+		@draw()
+		@fill @spec.fill ? @drawing.defaultFill
+		
+		@left = new Left @drawing, @x-w/2, @y
+		@right = new Right @drawing, @x+w/2, @y
+		@top = new Top @drawing, @x, @y-h/2
+		@bottom = new Bottom @drawing, @x, @y+h/2
+		
+	width: -> @spec.width
+	height: -> @spec.height
+	
+	draw: -> # Defined by subclass
+	
+	style: (style) -> SVG.set @svgElement, style: style
+	
+	fill: (color) -> 
+		$(@svgElement).css fill: color
+
+
+class Block extends Component
+	
+	@defaultSize: {width: 150, height: 100}
+	
+	width: -> @spec.width ? Block.defaultSize.width
+	height: -> @spec.height ? Block.defaultSize.height
+	
+	draw: ->
+		if @spec.shape is "circle"
+			@svgElement = SVG.element "circle"
+			SVG.set @svgElement,
+				cx: @x
+				cy: @y
+				r: @width()/2
+				style: "fill:white; stroke:black; stroke-width:1.5; "+
+					"fill-opacity:0.1"
+		else
+			@svgElement = SVG.element "rect"
+			w = @width()
+			h = @height()
+			SVG.set @svgElement,
+				x: @x - w/2
+				y: @y - h/2
+				width: w
+				height: h
+				style: "fill:white; stroke:black; stroke-width:1.5; "+
+					"fill-opacity:0.1"
+		@drawing.append @svgElement
+
+
+class Circle extends Component
+	
+	@defaultRadius: 20
+		
+	radius: -> @spec.radius ? Circle.defaultRadius
+	width: -> 2*@radius()
+	height: -> @width()
+	
+	draw: ->
+		@svgElement = SVG.element "circle"
+		SVG.set @svgElement,
+			cx: @x
+			cy: @y
+			r: @radius()
+			style: "fill:white; stroke:black; stroke-width:1.5; "+
+				"fill-opacity:0.1"
+		@drawing.append @svgElement
+
+
+class ForeignObject
+	
+	constructor: (@drawing, @spec) ->
+		@object = SVG.element "foreignObject"
+		SVG.set @object,
+			x: @spec.x
+			y: @spec.y
+			width: @spec.width
+			height: @spec.height 
+		@drawing.append @object
+		body = document.createElement "body"
+		body.setAttribute "xmlns", "http://www.w3.org/1999/xhtml"
+		@object.appendChild body
+		@body = $ body
+		
+	append: (object) -> @body.append object 
+
+
+class Labels
+	
+	constructor: ->
+		@labels = []
+		@container = $ "#mathjax"
+		@container.empty()
+	
+	append: (label) -> @labels.push label
+
+
+class Label
+	
+	@index: 0
+	
+	constructor: (@drawing, @spec) ->
+		s = @spec
+		return unless s.mathjax? and s.mathjax.length
+		# Make mathjax text if not $$.
+		# Later, support text/links etc.
+		if s.mathjax.indexOf("$") is -1
+			s.mathjax = "$\\text{#{s.mathjax}}$"
+		@drawing.addLabel this
+		
+		@container = $ "#mathjax"
+		
+		@id = "block_diagram_label_"+Label.index
+		@div = $ "<div>"
+			id: @id
+			html: s.mathjax
+		@container.append @div
+		
+		@scale = 0.02
+		
+		@processMathJax()
+		
+		# obj here?
+		
+		Label.index++
+	
+	align: ->
+        		
+		x = @spec.x
+		y = @spec.y
+		w = @width()
+		h = @height()
+		
+		a = @spec.align
+		
+		xo = {
+			left: 0
+			center: -w/2
+			right: -w
+		}
+		@x = x + (if a then xo[a] else 0)
+		
+		# Todo: use valign (middle, top, bottom).
+		yo = @spec.yOffset
+		@y = y + (if yo then yo.hFactor*h + yo.gap else -h/2)
+		
+	clone: ->
+		@source = $("##{@id}").find ".MathJax_SVG"
+		return unless @source.length
+		@svg = @source.find("svg").clone()
+		@div.remove()  # Clear original MathJax
+		g = @svg.find "g"
+		@group = $(g[0]).clone()
+		@align()
+		@translate @x, @y 
+		$("#drawing_svg").append @group
+		
+	viewBox: -> @svg[0].viewBox
+	
+	width: -> @scale * @viewBox().baseVal.width
+	
+	height: -> @scale * @viewBox().baseVal.height
+	
+	translate: (@dx, @dy) ->
+		dy = @dy + (-@scale * @viewBox().baseVal.y)
+		@group[0].setAttribute "transform", 
+			"translate(#{@dx} #{dy}) scale(#{@scale}) matrix(1 0 0 -1 0 0)"
+		
+	processMathJax: ->
+		Hub = MathJax.Hub
+		queue = (x) -> Hub.Queue x
+		queue ["PreProcess", Hub, @id]
+		queue ["Process", Hub, @id]
+		configElements = => Hub.config.elements = [@id]
+		queue configElements
+		queue (=> @clone())
+		
+
+
+class ArrowHead
+	
+	constructor: (@defs) ->
+		marker = SVG.element "marker"
+		@defs.appendChild marker
+		SVG.set marker,
+			id: "arrowHead"
+			viewBox: "0 0 30 20"
+			refX: "25"
+			refY: "10"
+			markerUnits: "strokeWidth"
+			markerWidth: 8
+			markerHeight: 6
+			orient: "auto"
+			fill: "black"
+		path = SVG.element "path"
+		SVG.set path, d: "M 0 0 L 30 10 L 0 20 z"
+		marker.appendChild path
+
+
+window.$setupDrawing = (redraw=false) ->
+        	
+    window.Drawing = Drawing
+		
+    if MathJax?
+        window.drawing()
+        return
+		
+    draw = ->
+        Hub = MathJax.Hub
+        Hub.config.MathMenu.settings.renderer = "SVG"
+        Hub.Queue ["call", MathJax.Menu.Renderer]
+        Hub.Queue [window.drawing]
+		
+    if $pz.event?.mathjaxProcessed?
+        $pz.event.mathjaxProcessed.on -> draw()
+    else
+        $(document).on "mathjaxPreConfig", ->
+            MathJax.Hub.Register.StartupHook "MathMenu Ready", ->
+                draw()
+</code>
+
+</document>
+
